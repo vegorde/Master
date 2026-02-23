@@ -31,7 +31,7 @@ def recv_line(conn, buf):
 # ---------------- MPC setup (yours) ----------------
 simtime = 20.0 
 dt, v, L = 0.1, 1, 0.32
-N = 30
+N = 50
 capang = dt * 3.14 * 50
 A = np.array([[1.0, dt * v],
               [0.0, 1.0]])
@@ -80,9 +80,10 @@ def build_mpc_nlp():
         e   = xk[0]
         psi = xk[1]
         delta = uk[0]
+        s_dot = v * np.cos(e) / (1 - kappak * e)
 
         e_dot   = v * ca.sin(psi)
-        psi_dot = (v / L) * ca.tan(delta) - v * kappak
+        psi_dot = (v / L) * ca.tan(delta) - s_dot * kappak
 
         e_next   = e   + dt * e_dot
         psi_next = psi + dt * psi_dot
@@ -125,7 +126,7 @@ def build_mpc_nlp():
     opts = {
         "ipopt.print_level": 0,
         "print_time": 0,
-        "ipopt.max_iter": 200,
+        "ipopt.max_iter": 20000,
         "ipopt.tol": 1e-6,
     }
 

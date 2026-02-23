@@ -41,7 +41,7 @@ B = np.array([[0.0],
 
 nx, nu = 2, 1
 
-Qe, Qpsi = 10, 1
+Qe, Qpsi = 1, 1
 Rdelta, Rdd = 1, 1
 
 delta_max = np.deg2rad(35)
@@ -80,7 +80,7 @@ def build_mpc_nlp():
         e   = xk[0]
         psi = xk[1]
         delta = uk[0]
-        s_dot = v * np.cos(e) / (1 - kappak * e)
+        s_dot = v * ca.cos(psi) / (1 - kappak * e)
 
         e_dot   = v * ca.sin(psi)
         psi_dot = (v / L) * ca.tan(delta) - s_dot * kappak
@@ -104,10 +104,15 @@ def build_mpc_nlp():
         g.append(X[:, k + 1] - x_next)
 
         # Stage cost
+        
         obj += Qe   * (X[0, k] ** 2)
         obj += Qpsi * (X[1, k] ** 2)
         obj += Rdelta * ca.sumsqr(U[:, k])
-
+        """
+        obj += Qe   * (X[0, k])
+        obj += Qpsi * (X[1, k])
+        obj += Rdelta * ca.sumsqr(U[:, k])
+        """
         # Rate cost (and later rate constraint)
         if k > 0:
             du = U[:, k] - U[:, k - 1]

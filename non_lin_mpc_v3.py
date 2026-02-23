@@ -32,7 +32,7 @@ def recv_line(conn, buf):
 # ---------------- MPC setup (yours) ----------------
 simtime = 20.0 
 dt, v, L = 0.1, 1, 0.32
-N = 50
+N = 100
 capang = dt * 3.14 * 50
 A = np.array([[1.0, dt * v],
               [0.0, 1.0]])
@@ -69,26 +69,19 @@ def build_mpc_nlp():
     # Parameters (things that change each solve)
     x0_p = ca.SX.sym("x0", nx)          # initial state
     kappa_p = ca.SX.sym("kappa", N)     # curvature sequence
+    v_p     = ca.SX.sym("v", N)
 
-    def f_step(xk, uk, kappak):
-        """
-        Nonlinear error dynamics (continuous -> discrete with forward Euler).
-
-        State x = [e, psi]
-        Input u = [delta]
-        Parameter kappak = curvature at step k
-        """
+    def f_step(xk, uk, kappak, vk):
         e   = xk[0]
         psi = xk[1]
         delta = uk[0]
-        s_dot = v * ca.cos(psi) / (1 - kappak * e)
 
-        e_dot   = v * ca.sin(psi)
-        psi_dot = (v / L) * ca.tan(delta) - s_dot * kappak
+        s_dot = vk * ca.cos(psi) / (1 - kappak * e)
+        e_dot   = vk * ca.sin(psi)
+        psi_dot = (vk / L) * ca.tan(delta) - s_dot * kappak
 
         e_next   = e   + dt * e_dot
         psi_next = psi + dt * psi_dot
-
         return ca.vertcat(e_next, psi_next)
 
 
@@ -101,7 +94,7 @@ def build_mpc_nlp():
 
     for k in range(N):
         # Dynamics constraint
-        x_next = f_step(X[:, k], U[:, k], kappa_p[k])
+        x_next = f_step(X[:, k], U[:, k], kappa_p[k], v_p[k])
         g.append(X[:, k + 1] - x_next)
 
         # Stage cost
@@ -109,11 +102,6 @@ def build_mpc_nlp():
         obj += Qe   * (X[0, k] ** 2)
         obj += Qpsi * (X[1, k] ** 2)
         obj += Rdelta * ca.sumsqr(U[:, k])
-        """
-        obj += Qe   * (X[0, k])
-        obj += Qpsi * (X[1, k])
-        obj += Rdelta * ca.sumsqr(U[:, k])
-        """
         # Rate cost (and later rate constraint)
         if k > 0:
             du = U[:, k] - U[:, k - 1]
@@ -124,7 +112,7 @@ def build_mpc_nlp():
 
     # Flatten decision vars
     z = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1))
-    p = ca.vertcat(x0_p, kappa_p)
+    p = ca.vertcat(x0_p, kappa_p, v_p)
 
     nlp = {"x": z, "f": obj, "g": g, "p": p}
 
@@ -179,14 +167,15 @@ def build_mpc_nlp():
 _solver, _lbg, _ubg, _lbz, _ubz, _unpack = build_mpc_nlp()
 _prev_z = None  # for warm-start initial guess
 
-def mpc_step_nonlinear(x0, kappa_seq):
+def mpc_step_nonlinear(x0, kappa_seq, v_seq):
     global _prev_z
 
     x0 = np.asarray(x0).reshape(-1)
     kappa_seq = np.asarray(kappa_seq).reshape(-1)
+    v_seq = np.asarray(v_seq).reshape(-1)
     assert kappa_seq.size == N
-
-    p = np.concatenate([x0, kappa_seq])
+    assert v_seq.size == N
+    p = np.concatenate([x0, kappa_seq, v_seq])
 
     # Initial guess (warm start): either previous solution shifted, or zeros
     if _prev_z is None:
@@ -400,33 +389,21 @@ if __name__ == "__main__":
         (2.000, 0.000, 1.000),
         (4.000, 0.000, 1.000),
         (6.000, 0.000, 1.000),
-        (8.000, 0.000, 1.000),
+        (8.000, 0.000, 0.550),
         (10.000, 0.000, 0.100),
-        (10.000, 2.000, 1.000),
+        (10.000, 2.000, 0.550),
         (10.000, 4.000, 1.000),
         (10.000, 6.000, 1.000),
         (10.000, 8.000, 1.000),
         (10.000, 10.000, 1.000),
     ]
 
-    ds = v * dt  # fixed spatial spacing that matches your internal model
+    ds = 0.1
     xref, yref, psiref, vref, kappa_path = build_ref_from_waypoints_xyv(waypoints, ds)
 
     # Optional: ensure the path is long enough for simtime + horizon indexing
     # (so min(idx+k) doesn't clamp too early)
     min_points_needed = int(np.ceil(simtime / dt)) + N + 5
-    if len(xref) < min_points_needed and False:
-        # If your waypoints are short, extend last point forward along last heading:
-        extra = min_points_needed - len(xref)
-        last_psi = psiref[-1]
-        x_ext = xref[-1] + ds * np.cos(last_psi) * np.arange(1, extra + 1)
-        y_ext = yref[-1] + ds * np.sin(last_psi) * np.arange(1, extra + 1)
-        v_ext = np.full(extra, vref[-1])
-        xref = np.concatenate([xref, x_ext])
-        yref = np.concatenate([yref, y_ext])
-        vref = np.concatenate([vref, v_ext])
-        # headings + curvature for the extension
-        psiref, kappa_path = compute_heading_and_curvature_from_spline(xref, yref)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -477,9 +454,14 @@ if __name__ == "__main__":
                     kappa_path[min(idx + k, len(kappa_path) - 1)]
                     for k in range(N)
                 ]
+                v_seq = [
+                    float(vref[min(idx + k, len(vref) - 1)])
+                    for k in range(N)
+                ]
+
                 if t - last_mpc_t >= dt:
                     startime = time.time()
-                    delta_cmd = mpc_step_nonlinear(x_err, kappa_seq)
+                    delta_cmd = mpc_step_nonlinear(x_err, kappa_seq, v_seq)
                     runtime = time.time() - startime
                     if runtime > largest_sampletime:
                         largest_sampletime = runtime

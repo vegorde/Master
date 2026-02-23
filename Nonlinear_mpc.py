@@ -7,6 +7,7 @@ import time
 # Server tcp setup
 import socket
 import json
+from scipy.interpolate import CubicSpline, PchipInterpolator
 
 HOST = "127.0.0.1"
 PORT = 5555
@@ -66,8 +67,8 @@ def build_mpc_nlp():
     U = ca.SX.sym("U", nu, N)
 
     # Parameters (things that change each solve)
-    x0_p = ca.SX.sym("x0", nx)     # initial state
-    kappa_p = ca.SX.sym("kappa", N)  # curvature sequence
+    x0_p = ca.SX.sym("x0", nx)          # initial state
+    kappa_p = ca.SX.sym("kappa", N)     # curvature sequence
 
     def f_step(xk, uk, kappak):
         """
@@ -224,21 +225,156 @@ def closest_index_windowed(x, y, xref, yref, last_idx=0, window=100):
     return i0 + int(np.argmin(d2))
 
 
-def build_ref_from_kappa(kappa_path, x0=0.0, y0=0.0, psi0=0.0, v=v, dt=dt):
-    ds = v * dt
-    Np = len(kappa_path)
-    xref = np.zeros(Np + 1)
-    yref = np.zeros(Np + 1)
-    psiref = np.zeros(Np + 1)
-    xref[0], yref[0], psiref[0] = x0, y0, psi0
-    for k in range(Np):
-        psiref[k + 1] = psiref[k] + kappa_path[k] * ds
-        xref[k + 1] = xref[k] + ds * np.cos(psiref[k])
-        yref[k + 1] = yref[k] + ds * np.sin(psiref[k])
-    return xref, yref, psiref
+def resample_waypoints_xyv(waypoints, ds, kind_xy="cubic", kind_v="pchip"):
+    """
+    Spline-resample waypoints into a smooth path with ~constant spatial spacing ds.
+
+    waypoints: list of (x, y, v)
+    ds: desired arc-length step [m]
+
+    kind_xy:
+      - "cubic"  -> CubicSpline for x(s), y(s)  (smooth, can overshoot on sharp corners)
+      - "pchip"  -> PchipInterpolator for x(s), y(s) (shape-preserving, less overshoot)
+
+    kind_v:
+      - "pchip"  -> recommended for speed profile (avoids overshoot)
+      - "cubic"  -> smoother but can overshoot
+
+    Returns: xref, yref, vref sampled at uniform s
+    """
+    wp = np.asarray(waypoints, dtype=float)
+    assert wp.shape[1] == 3 and wp.shape[0] >= 2, "Need at least 2 waypoints of (x,y,v)."
+
+    xw, yw, vw = wp[:, 0], wp[:, 1], wp[:, 2]
+
+    # Build cumulative chord-length parameter s
+    dx = np.diff(xw)
+    dy = np.diff(yw)
+    seg = np.hypot(dx, dy)
+
+    # Remove duplicate consecutive points (seg == 0) to keep s strictly increasing
+    keep = np.ones(len(wp), dtype=bool)
+    keep[1:] = seg > 1e-9
+    xw, yw, vw = xw[keep], yw[keep], vw[keep]
+    assert len(xw) >= 2, "All waypoints collapsed or duplicates."
+
+    dx = np.diff(xw)
+    dy = np.diff(yw)
+    seg = np.hypot(dx, dy)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(s[-1])
+    if total < 1e-9:
+        # Degenerate: everything is same point
+        return np.array([xw[0]]), np.array([yw[0]]), np.array([vw[0]])
+
+    # Sample s uniformly
+    n = int(np.floor(total / ds))
+    s_ref = np.linspace(0.0, total, n + 1)
+
+    # Choose spline types
+    def make_interp(kind, t, z):
+        if kind == "cubic":
+            return CubicSpline(t, z, bc_type="natural")
+        elif kind == "pchip":
+            return PchipInterpolator(t, z)
+        else:
+            raise ValueError(f"Unknown kind '{kind}' (use 'cubic' or 'pchip').")
+
+    fx = make_interp(kind_xy, s, xw)
+    fy = make_interp(kind_xy, s, yw)
+    fv = make_interp(kind_v,  s, vw)
+
+    xref = fx(s_ref)
+    yref = fy(s_ref)
+    vref = fv(s_ref)
+
+    return np.asarray(xref), np.asarray(yref), np.asarray(vref)
+
+
+def compute_heading_and_curvature_from_spline(waypoints, ds, kind_xy="cubic", kind_v="pchip"):
+    """
+    One-shot: spline resample + heading + curvature using spline derivatives.
+    Returns xref, yref, psiref, vref, kappa_path
+    """
+    wp = np.asarray(waypoints, dtype=float)
+    xw, yw, vw = wp[:, 0], wp[:, 1], wp[:, 2]
+
+    # Build cumulative chord-length parameter s
+    dx = np.diff(xw); dy = np.diff(yw)
+    seg = np.hypot(dx, dy)
+    keep = np.ones(len(wp), dtype=bool)
+    keep[1:] = seg > 1e-9
+    xw, yw, vw = xw[keep], yw[keep], vw[keep]
+
+    dx = np.diff(xw); dy = np.diff(yw)
+    seg = np.hypot(dx, dy)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(s[-1])
+
+    n = int(np.floor(total / ds))
+    s_ref = np.linspace(0.0, total, n + 1)
+
+    from scipy.interpolate import CubicSpline, PchipInterpolator
+
+    def make_interp(kind, t, z):
+        if kind == "cubic":
+            return CubicSpline(t, z, bc_type="natural")
+        elif kind == "pchip":
+            return PchipInterpolator(t, z)
+        else:
+            raise ValueError(f"Unknown kind '{kind}'")
+
+    fx = make_interp(kind_xy, s, xw)
+    fy = make_interp(kind_xy, s, yw)
+    fv = make_interp(kind_v,  s, vw)
+
+    xref = fx(s_ref)
+    yref = fy(s_ref)
+    vref = fv(s_ref)
+
+    # First and second derivatives wrt s
+    x_s  = fx.derivative(1)(s_ref)
+    y_s  = fy.derivative(1)(s_ref)
+    x_ss = fx.derivative(2)(s_ref)
+    y_ss = fy.derivative(2)(s_ref)
+
+    # Heading at points
+    psiref = np.unwrap(np.arctan2(y_s, x_s))
+
+    # Curvature at points (length M)
+    denom = (x_s**2 + y_s**2)**1.5
+    denom = np.maximum(denom, 1e-12)
+    kappa_points = (x_s * y_ss - y_s * x_ss) / denom
+
+    # Your MPC expects curvature per segment (length M-1).
+    # Take segment curvature as the average of adjacent point curvatures.
+    kappa_path = 0.5 * (kappa_points[:-1] + kappa_points[1:])
+
+    return np.asarray(xref), np.asarray(yref), np.asarray(psiref), np.asarray(vref), np.asarray(kappa_path)
+
+
+def build_ref_from_waypoints_xyv(waypoints, ds):
+    # Best quality: compute heading+curvature from spline derivatives
+    xref, yref, psiref, vref, kappa_path = compute_heading_and_curvature_from_spline(
+        waypoints, ds, kind_xy="cubic", kind_v="pchip"
+    )
+
+    kappa_path = smooth(kappa_path, w=9)
+
+    return xref, yref, psiref, vref, kappa_path
 
 def wrap_angle(a):
     return (a + np.pi) % (2*np.pi) - np.pi
+
+def smooth(x, w=7):
+    """
+    Simple moving average smoothing.
+    w = window size (odd numbers like 5,7,9 work best)
+    """
+    if w <= 1:
+        return x
+    k = np.ones(w) / w
+    return np.convolve(x, k, mode="same")
 
 def compute_errors(x, y, yaw, xr, yr, psir):
     dx = x - xr
@@ -258,28 +394,40 @@ if __name__ == "__main__":
     es, psis = [], []
     ts = []
 
-    # ---------- Reference path ----------                # seconds you intend to run
-    kappa_len = int(np.ceil(simtime / dt)) + N
-    kappa_path = []
-    """
-    for i in range(kappa_len):
-        if i > kappa_len/4 and i < kappa_len * 3/4:
-            kappa_path.append(0.1)
-        else:
-            kappa_path.append(0)
-    """
-    """
-    for i in range(kappa_len):
-        if i == int(kappa_len/2):
-            kappa_path.append(capang)
-        else:
-            kappa_path.append(0)
-    """
-    for i in range(kappa_len):
-        t = i / dt 
-        kappa_path.append(0.5*np.cos(i * 0.05))
-    
-    xref, yref, psiref = build_ref_from_kappa(kappa_path)
+    # --- Reference defined as waypoints (x, y, v) ---
+    waypoints = [
+        (0.000, 0.000, 1.000),
+        (2.000, 0.000, 1.000),
+        (4.000, 0.000, 1.000),
+        (6.000, 0.000, 1.000),
+        (8.000, 0.000, 1.000),
+        (10.000, 0.000, 0.100),
+        (10.000, 2.000, 1.000),
+        (10.000, 4.000, 1.000),
+        (10.000, 6.000, 1.000),
+        (10.000, 8.000, 1.000),
+        (10.000, 10.000, 1.000),
+    ]
+
+    ds = v * dt  # fixed spatial spacing that matches your internal model
+    xref, yref, psiref, vref, kappa_path = build_ref_from_waypoints_xyv(waypoints, ds)
+
+    # Optional: ensure the path is long enough for simtime + horizon indexing
+    # (so min(idx+k) doesn't clamp too early)
+    min_points_needed = int(np.ceil(simtime / dt)) + N + 5
+    if len(xref) < min_points_needed and False:
+        # If your waypoints are short, extend last point forward along last heading:
+        extra = min_points_needed - len(xref)
+        last_psi = psiref[-1]
+        x_ext = xref[-1] + ds * np.cos(last_psi) * np.arange(1, extra + 1)
+        y_ext = yref[-1] + ds * np.sin(last_psi) * np.arange(1, extra + 1)
+        v_ext = np.full(extra, vref[-1])
+        xref = np.concatenate([xref, x_ext])
+        yref = np.concatenate([yref, y_ext])
+        vref = np.concatenate([vref, v_ext])
+        # headings + curvature for the extension
+        psiref, kappa_path = compute_heading_and_curvature_from_spline(xref, yref)
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((HOST, PORT))
@@ -346,7 +494,7 @@ if __name__ == "__main__":
                     }")
 
                 # ---------- Send command back ----------
-                reply = {"delta": delta_cmd, "v": v}
+                reply = {"delta": delta_cmd, "v": float(vref[idx])}
                 try:
                     conn.sendall((json.dumps(reply) + "\n").encode("utf-8"))
                 except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError) as e:
@@ -362,7 +510,7 @@ if __name__ == "__main__":
                 psis.append(x_err[1])
                 deltas.append(delta_cmd)
                 vels.append(vel)
-                reqv.append(v)
+                reqv.append(float(vref[idx]))
                 if len(xs) % 100 == 0:
                     print(
                         f"[MPC] t={t:5.2f} "

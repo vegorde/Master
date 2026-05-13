@@ -67,11 +67,11 @@ def main():
     max_steps = int(max_time / dt_phys)
 
     # Vehicle parameters (match what your MPC assumes)
-    wheel_base = 0.32
+    wheel_base = 2.27
 
     # Limits (optional but realistic)
-    max_steer = math.radians(30.0)   # steering angle limit
-    max_speed = 5.0                 # m/s speed limit
+    max_steer = math.radians(15)   # steering angle limit
+    max_speed = 20                 # m/s speed limit
 
     # First-order actuator response (optional but helpful)
     # Set to 0.0 to make it “instant”
@@ -121,6 +121,7 @@ def main():
                 "y": float(y),
                 "yaw": float(yaw),
                 "v": float(v),
+                "delta": float(delta)
             }
 
             cmd = tcp.send_state_get_cmd(state_msg)

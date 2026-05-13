@@ -68,14 +68,13 @@ if __name__ == "__main__":
 
     # -------- YOUR WAYPOINTS --------
     waypoints = [
-        (0.0,  0.0, 1.0),
-        (6.0,  0.0, 1.0),
-        (10.0, 0.0, 0.1),
-        (10.0, 4.0, 1.0),
-        (10.0, 10.0, 1.0),
+        (0.000, 0.000, 5.000),
+        (30.000, 0.000, 5.000),
+        (80.000, 2.300, 5.000),
+        (150.000, 2.300, 5.000),
     ]
 
-    ds = 2   # desired spacing in meters
+    ds = 5   # desired spacing in meters
 
     xref, yref, vref = resample_waypoints_linear_xyv(waypoints, ds)
 

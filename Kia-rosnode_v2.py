@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """
 mpc_v4_ipopt_car_minimal.py
-
-Minimal ROS2 adaptation of the original mpc v4.py:
-- Keeps the nonlinear CasADi/IPOPT MPC structure, but embeds the steering actuator:
 - states [e, psi_err, theta_sw_deg]
-- input normalized steering torque u in [-1, 1]
-- Replaces TCP/JSON server with ROS2 car interface.
 - Subscribes:
     gnss/pose             geometry_msgs/PoseStamped
     vehicle/state         car_control/VehicleState
@@ -16,14 +11,6 @@ Minimal ROS2 adaptation of the original mpc v4.py:
         linear.x  = accel_cmd [-1, 1]
         angular.z = torque_cmd [-1, 1]
 - Publishes debug topics compatible with current lateral_mpc_node.cpp.
-
-Important:
-The nonlinear MPC now optimizes normalized steering torque directly. Steering-wheel angle
-is part of the MPC state and is propagated using the identified speed-scheduled first-order
-steering model from message(5). No post-MPC delta-to-torque PID/PD adapter is used.
-
-If IPOPT fails, no PD fallback MPC is used. The node either holds the last torque command
-or sends zero depending on parameter hold_last_on_solver_fail.
 """
 
 import math
@@ -55,14 +42,11 @@ MIN_SPEED = 0.3
 SOFT_START_DURATION = 3.0
 
 
-# ---------------- MPC setup, kept nonlinear/IPOPT ----------------
-# State: [e, psi_err, theta_sw_deg]
-# Input: normalized steering torque [-1, 1]
+# State and controll variables
 nx, nu = 3, 1
 
 
 # ---------------- Identified steering actuator model ----------------
-# Model from message(5):
 #   theta[k+1] = a(v) * theta[k] + b(v) * u[k]
 # where theta is steering-wheel angle [deg] and u is normalized torque [-1, 1].
 SCHED_V_KMH = np.array([5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 36.0, 40.0, 45.0, 50.0], dtype=float)
@@ -189,16 +173,6 @@ def compute_heading_and_curvature_from_spline(waypoints, ds, kind_xy="cubic", ki
 
 
 class NonlinearIpoptMpc:
-    """
-    Nonlinear CasADi/IPOPT MPC with embedded steering actuator dynamics.
-
-    State:
-        x = [e, psi_err, theta_sw_deg]
-
-    Input:
-        u = normalized steering torque [-1, 1]
-    """
-
     def __init__(self, dt: float, horizon: int, wheelbase: float,
                  q_e: float, q_psi: float, r_torque: float, r_d_torque: float,
                  delta_max: float, steering_ratio: float):
@@ -376,12 +350,12 @@ class MpcV4IpoptCarNode(Node):
 
         # Parameters: kept close to your original MPC but made car-interface configurable.
         self.declare_parameter("path_csv_file", "")
-        self.declare_parameter("default_speed_mps", 25/3.6)
-        self.declare_parameter("desired_speed_mps", 4.0)
+        self.declare_parameter("default_speed_mps", 20/3.6)
+        self.declare_parameter("desired_speed_mps", 20/3.6)
         self.declare_parameter("stop_distance", 3.0)
         self.declare_parameter("ds", 0.1)
         self.declare_parameter("mpc_dt", 0.1)
-        self.declare_parameter("horizon", 60)
+        self.declare_parameter("horizon", 50)
         self.declare_parameter("wheelbase", WHEELBASE)
         self.declare_parameter("weight_e", 0.01)
         self.declare_parameter("weight_psi", 0.1)

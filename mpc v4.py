@@ -26,18 +26,19 @@ dt              = 1.0 / CONTROL_HZ
 simtime         = 200.0
 
 # MPC horizon and weights  (same as Kia-rosnode_v2 defaults)
-N            = 100
-delta_max    = math.radians(15.0)           # max front-wheel angle [rad]
+N            = 50
+delta_max    = math.radians(35.0)           # max front-wheel angle [rad]
 theta_sw_max = math.degrees(delta_max * STEERING_RATIO)  # max steering-wheel angle [deg]
 
-Qe       = 0.01    # cross-track error weight
-Qpsi     = 0.1     # heading error weight
+Qe       = 0.1 * 10    # cross-track error weight
+Qpsi     = 0.1*1     # heading error weight
+Rdelta   = 100 * 0.001       # Steering angle rate weight
 Rtorque  = 0.01    # torque magnitude weight
-Rdtorque = 1.0     # torque rate weight
+Rdtorque = 0.1     # torque rate weight
 
 nx, nu = 3, 1      # states: [e, psi_err, theta_sw_deg],  input: torque [-1, 1]
 
-DEFAULT_SPEED_MPS = 20 / 3.6   # ~5.56 m/s
+DEFAULT_SPEED_MPS = 15 / 3.6   # ~5.56 m/s
 
 
 # ---------------- Speed-scheduled steering actuator (from Kia-rosnode_v2) ----
@@ -203,6 +204,9 @@ def build_mpc_nlp():
         obj += Rtorque * ca.sumsqr(U[:, k])
         if k > 0:
             obj += Rdtorque * ca.sumsqr(U[:, k] - U[:, k - 1])
+            # Rate of actual front-wheel angle: delta = theta_sw_deg * pi/180 / STEERING_RATIO
+            d_delta = (X[2, k] - X[2, k - 1]) * (math.pi / 180.0 / STEERING_RATIO)
+            obj += Rdelta * d_delta ** 2
 
     g = ca.vertcat(*g)
     z = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1))
@@ -277,7 +281,8 @@ def mpc_step(x0, kappa_seq, v_seq, steer_a_seq, steer_b_seq):
         return False, 0.0
 
     _prev_z = z_opt
-    return True, float(np.clip(U_opt[:, 0].item(), -1.0, 1.0))
+    torque_cmd = float(np.clip(U_opt[:, 0].item(), -1.0, 1.0))
+    return True, torque_cmd
 
 
 # ---------------- Main (TCP server) ───────────────────────────────────────────
@@ -306,9 +311,9 @@ if __name__ == "__main__":
     delta_target    = []   # front-wheel angle commanded by MPC [rad]
     largest_runtime = 0.0
 
-    last_mpc_t   = -1e9
-    last_torque  = 0.0
-    last_idx     = 0
+    last_mpc_t  = -1e9
+    last_torque = 0.0
+    last_idx    = 0
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -364,11 +369,10 @@ if __name__ == "__main__":
                     else:
                         print("[MPC] IPOPT failed — holding previous torque")
 
-                # Convert torque → estimated front-wheel angle for the sim
-                # Using the actuator steady-state: theta_sw_ss = kss * torque
-                v_now  = max(vel, 0.5)
-                a, b   = steering_ab(v_now)
-                kss    = b / max(1.0 - a, 1e-6)
+                # Convert torque → front-wheel angle for the sim via actuator steady-state.
+                v_now = max(vel, 0.5)
+                a, b  = steering_ab(v_now)
+                kss   = b / max(1.0 - a, 1e-6)
                 theta_sw_cmd = float(np.clip(kss * last_torque, -theta_sw_max, theta_sw_max))
                 delta_cmd    = float(np.clip(
                     math.radians(theta_sw_cmd) / STEERING_RATIO,

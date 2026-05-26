@@ -76,7 +76,7 @@ def wrap_pi(a: float) -> float:
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
-
+default_speed = 15
 def main():
     # --------- user settings ----------
     HOST = "127.0.0.1"
@@ -88,14 +88,14 @@ def main():
     # MPC / control update period
     dt_mpc = 0.1           # 10 Hz (must match server)
 
-    max_time = 75.0
+    max_time = 75.0 * 20/default_speed
     max_steps = int(max_time / dt_phys)
 
     # Vehicle parameters (match what your MPC assumes)
     wheel_base = 2.79
 
     # Limits (optional but realistic)
-    max_steer = math.radians(15)   # steering angle limit
+    max_steer = math.radians(35)   # steering angle limit
     max_speed = 20                 # m/s speed limit
 
     # First-order actuator response (optional but helpful)

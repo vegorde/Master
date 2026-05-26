@@ -3,6 +3,31 @@ import socket
 import json
 import math
 import time
+import csv
+import matplotlib.pyplot as plt
+
+# ── Edit this ─────────────────────────────────────────────────────────────────
+# Point at the same path.csv used by the MPC server.
+# The simulator will start at the first waypoint, heading toward the second.
+# Set to "" to fall back to x=0, y=0, yaw=0.
+PATH_CSV = r"C:\Users\vegar\Documents\Isacsim\git\local\Master\Rosbag\path.csv"
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def initial_state_from_csv(path_csv):
+    """Read the first two waypoints from a path CSV and return (x, y, yaw)."""
+    pts = []
+    with open(path_csv, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            pts.append((float(row["x"]), float(row["y"])))
+            if len(pts) == 2:
+                break
+    if len(pts) < 2:
+        raise ValueError(f"Need at least 2 waypoints in {path_csv}")
+    x0, y0 = pts[0]
+    yaw0 = math.atan2(pts[1][1] - pts[0][1], pts[1][0] - pts[0][0])
+    return x0, y0, yaw0
 
 
 class TCPClient:
@@ -63,11 +88,11 @@ def main():
     # MPC / control update period
     dt_mpc = 0.1           # 10 Hz (must match server)
 
-    max_time = 20.0
+    max_time = 75.0
     max_steps = int(max_time / dt_phys)
 
     # Vehicle parameters (match what your MPC assumes)
-    wheel_base = 2.27
+    wheel_base = 2.79
 
     # Limits (optional but realistic)
     max_steer = math.radians(15)   # steering angle limit
@@ -76,12 +101,14 @@ def main():
     # First-order actuator response (optional but helpful)
     # Set to 0.0 to make it “instant”
     tau_v = 0.20      # seconds (speed response)
-    tau_delta = 0.15  # seconds (steer response)
+    tau_delta = 1.0  # seconds (steer response)
 
     # --------- initial state ----------
-    x = 0.0
-    y = 0.0
-    yaw = 0.0
+    if PATH_CSV:
+        x, y, yaw = initial_state_from_csv(PATH_CSV)
+        print(f"[BICYCLE] Starting at ({x:.2f}, {y:.2f}), yaw={math.degrees(yaw):.1f} deg  (from path CSV)")
+    else:
+        x, y, yaw = 0.0, 0.0, 0.0
 
     # Actual simulated states (what you report as v)
     v = 1.0
@@ -100,6 +127,13 @@ def main():
 
     simtime = 0.0
     mpc_timer = 0.0
+
+    # Logging buffers
+    log_t       = []
+    log_x       = []
+    log_y       = []
+    log_delta   = []   # actual steering angle
+    log_delta_cmd = [] # target steering angle from MPC
 
     # If you want the sim to run in real-time, keep this True.
     # If False, it runs as fast as it can (often better for testing).

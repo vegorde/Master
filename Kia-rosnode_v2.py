@@ -175,7 +175,7 @@ def compute_heading_and_curvature_from_spline(waypoints, ds, kind_xy="cubic", ki
 class NonlinearIpoptMpc:
     def __init__(self, dt: float, horizon: int, wheelbase: float,
                  q_e: float, q_psi: float, r_torque: float, r_d_torque: float,
-                 delta_max: float, steering_ratio: float):
+                 r_delta: float, delta_max: float, steering_ratio: float):
         self.dt = dt
         self.N = int(horizon)
         self.L = wheelbase
@@ -183,6 +183,7 @@ class NonlinearIpoptMpc:
         self.Qpsi = q_psi
         self.Rtorque = r_torque
         self.Rdtorque = r_d_torque
+        self.Rdelta = r_delta
         self.delta_max = delta_max
         self.steering_ratio = steering_ratio
         self.theta_sw_max_deg = math.degrees(delta_max * steering_ratio)
@@ -243,6 +244,8 @@ class NonlinearIpoptMpc:
             if k > 0:
                 du = U[:, k] - U[:, k - 1]
                 obj += self.Rdtorque * ca.sumsqr(du)
+                d_delta = (X[2, k] - X[2, k - 1]) * (math.pi / 180.0 / steering_ratio)
+                obj += self.Rdelta * d_delta ** 2
 
         g = ca.vertcat(*g)
         z = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1))
@@ -357,11 +360,12 @@ class MpcV4IpoptCarNode(Node):
         self.declare_parameter("mpc_dt", 0.1)
         self.declare_parameter("horizon", 50)
         self.declare_parameter("wheelbase", WHEELBASE)
-        self.declare_parameter("weight_e", 0.01)
+        self.declare_parameter("weight_e", 1.0)
         self.declare_parameter("weight_psi", 0.1)
         self.declare_parameter("weight_delta", 0.01)
-        self.declare_parameter("weight_d_delta", 1.0)
-        self.declare_parameter("delta_max_deg", 15.0)
+        self.declare_parameter("weight_d_delta", 0.1)
+        self.declare_parameter("weight_delta_rate", 0.1)
+        self.declare_parameter("delta_max_deg", 35.0)
         self.declare_parameter("kp_speed", 0.3)
 
         # The MPC now outputs normalized steering torque directly.
@@ -380,6 +384,7 @@ class MpcV4IpoptCarNode(Node):
             q_psi=float(self.get_parameter("weight_psi").value),
             r_torque=float(self.get_parameter("weight_delta").value),
             r_d_torque=float(self.get_parameter("weight_d_delta").value),
+            r_delta=float(self.get_parameter("weight_delta_rate").value),
             delta_max=self.delta_max,
             steering_ratio=STEERING_RATIO,
         )

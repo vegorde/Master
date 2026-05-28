@@ -27,7 +27,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import Bool, Float64
+from std_msgs.msg import Bool, Float64, String
 from nav_msgs.msg import Path as RosPath
 
 from car_control.msg import VehicleState
@@ -408,12 +408,14 @@ class MpcV4IpoptCarNode(Node):
         self.last_torque_cmd = 0.0
         self.integral_cte = 0.0
 
-        self.xref, self.yref, self.psiref, self.vref, self.kappa_path, self.s_ref = self._load_path()
+        self.xref = self.yref = self.psiref = self.vref = self.kappa_path = self.s_ref = None
+        self._try_load_startup_path()
 
         # Subscribers
         self.create_subscription(PoseStamped, "gnss/pose", self.gnss_pose_cb, 10)
         self.create_subscription(VehicleState, "vehicle/state", self.vehicle_state_cb, 10)
         self.create_subscription(Bool, "enable_path_following", self.enable_cb, 10)
+        self.create_subscription(String, "/lateral_mpc/load_path", self.load_path_cb, 10)
 
         # Publishers
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -443,19 +445,47 @@ class MpcV4IpoptCarNode(Node):
         self.auto_enable = bool(self.get_parameter("auto_enable").value)
         self.auto_enable_fired = False
 
+        path_info = f"{len(self.xref)} points" if self.xref is not None else "no path loaded (waiting for /lateral_mpc/load_path)"
         self.get_logger().info(
-            f"MPCv4 IPOPT car node ready. Nonlinear MPC kept. N={self.horizon}, mpc_dt={self.mpc_dt}, path={len(self.xref)} points"
+            f"MPCv4 IPOPT car node ready. Nonlinear MPC kept. N={self.horizon}, mpc_dt={self.mpc_dt}, path={path_info}"
         )
 
-    def _load_path(self):
-        path_csv = str(self.get_parameter("path_csv_file").value)
+    def _try_load_startup_path(self):
+        path_csv = str(self.get_parameter("path_csv_file").value).strip()
+        if not path_csv:
+            self.get_logger().info("No path_csv_file set at startup — waiting for /lateral_mpc/load_path")
+            return
+        self._load_path_from_file(path_csv)
+
+    def _load_path_from_file(self, path_csv: str):
         default_speed = float(self.get_parameter("default_speed_mps").value)
         ds = float(self.get_parameter("ds").value)
-
-        waypoints = load_waypoints_csv(path_csv, default_speed)
+        try:
+            waypoints = load_waypoints_csv(path_csv, default_speed)
+        except Exception as exc:
+            self.get_logger().error(f"Failed to load path CSV '{path_csv}': {exc}")
+            return
         self.get_logger().info(f"Loaded path CSV '{path_csv}' with {len(waypoints)} waypoints")
+        self.xref, self.yref, self.psiref, self.vref, self.kappa_path, self.s_ref = \
+            compute_heading_and_curvature_from_spline(waypoints, ds, kind_xy="cubic", kind_v="pchip")
+        self.last_idx = 0
+        if self.state in (State.FOLLOWING, State.STOPPING):
+            self.get_logger().info("Path hot-swapped; resetting to IDLE")
+            self.state = State.IDLE
+            self.publish_cmd(0.0, 0.0)
+            self.publish_status(False)
+        self.publish_path_visualization()
 
-        return compute_heading_and_curvature_from_spline(waypoints, ds, kind_xy="cubic", kind_v="pchip")
+    def load_path_cb(self, msg: String):
+        path_csv = msg.data.strip()
+        if not path_csv:
+            self.get_logger().info("Received empty load_path — clearing path and going IDLE")
+            self.xref = self.yref = self.psiref = self.vref = self.kappa_path = self.s_ref = None
+            self.state = State.IDLE
+            self.publish_cmd(0.0, 0.0)
+            self.publish_status(False)
+            return
+        self._load_path_from_file(path_csv)
 
     def gnss_pose_cb(self, msg: PoseStamped):
         self.car_x = float(msg.pose.position.x)
@@ -494,6 +524,9 @@ class MpcV4IpoptCarNode(Node):
             return
 
         if self.state == State.IDLE:
+            if self.xref is None:
+                self.get_logger().warn("Cannot start: no path loaded yet")
+                return
             if not self.gnss_valid:
                 self.get_logger().warn("Cannot start: no GNSS fix received yet")
                 return
@@ -523,6 +556,10 @@ class MpcV4IpoptCarNode(Node):
 
     def control_loop(self):
         if self.state == State.IDLE:
+            return
+
+        if self.xref is None:
+            self.state = State.IDLE
             return
 
         if not self.gnss_valid:
@@ -653,6 +690,8 @@ class MpcV4IpoptCarNode(Node):
         self.pub_pf_cmd.publish(pf)
 
     def publish_path_visualization(self):
+        if self.xref is None:
+            return
         msg = RosPath()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "map"

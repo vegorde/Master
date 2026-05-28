@@ -7,9 +7,9 @@ mpc_v4_ipopt_car_minimal.py
     vehicle/state         car_control/VehicleState
     enable_path_following std_msgs/Bool
 - Publishes:
-    cmd_vel               geometry_msgs/Twist
-        linear.x  = accel_cmd [-1, 1]
-        angular.z = torque_cmd [-1, 1]
+    cmd_vel               car_control/DriveCommand
+        accel  = accel_cmd [-1, 1]
+        torque = torque_cmd [-1, 1]
 - Publishes debug topics compatible with current lateral_mpc_node.cpp.
 """
 
@@ -24,13 +24,13 @@ from scipy.interpolate import CubicSpline, PchipInterpolator
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, qos_profile_sensor_data
 
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Bool, Float64, String
 from nav_msgs.msg import Path as RosPath
 
-from car_control.msg import VehicleState
+from car_control.msg import VehicleState, DriveCommand
 
 
 # ---------------- Vehicle / interface constants ----------------
@@ -353,8 +353,8 @@ class MpcV4IpoptCarNode(Node):
 
         # Parameters: kept close to your original MPC but made car-interface configurable.
         self.declare_parameter("path_csv_file", "")
-        self.declare_parameter("default_speed_mps", 20/3.6)
-        self.declare_parameter("desired_speed_mps", 20/3.6)
+        self.declare_parameter("default_speed_mps", 15/3.6)
+        self.declare_parameter("desired_speed_mps", 15/3.6)
         self.declare_parameter("stop_distance", 3.0)
         self.declare_parameter("ds", 0.1)
         self.declare_parameter("mpc_dt", 0.1)
@@ -363,7 +363,7 @@ class MpcV4IpoptCarNode(Node):
         self.declare_parameter("weight_e", 1.0)
         self.declare_parameter("weight_psi", 0.1)
         self.declare_parameter("weight_delta", 0.01)
-        self.declare_parameter("weight_d_delta", 0.1)
+        self.declare_parameter("weight_d_delta", 1)
         self.declare_parameter("weight_delta_rate", 0.1)
         self.declare_parameter("delta_max_deg", 35.0)
         self.declare_parameter("kp_speed", 0.3)
@@ -413,12 +413,12 @@ class MpcV4IpoptCarNode(Node):
 
         # Subscribers
         self.create_subscription(PoseStamped, "gnss/pose", self.gnss_pose_cb, 10)
-        self.create_subscription(VehicleState, "vehicle/state", self.vehicle_state_cb, 10)
+        self.create_subscription(VehicleState, "vehicle/state", self.vehicle_state_cb, qos_profile_sensor_data)
         self.create_subscription(Bool, "enable_path_following", self.enable_cb, 10)
         self.create_subscription(String, "/lateral_mpc/load_path", self.load_path_cb, 10)
 
         # Publishers
-        self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.cmd_pub = self.create_publisher(DriveCommand, "cmd_vel", 10)
         latched_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -654,9 +654,9 @@ class MpcV4IpoptCarNode(Node):
         )
 
     def publish_cmd(self, accel_cmd: float, torque_cmd: float):
-        msg = Twist()
-        msg.linear.x = float(max(-1.0, min(1.0, accel_cmd)))
-        msg.angular.z = float(max(-1.0, min(1.0, torque_cmd)))
+        msg = DriveCommand()
+        msg.accel = float(max(-1.0, min(1.0, accel_cmd)))
+        msg.torque = float(max(-1.0, min(1.0, torque_cmd)))
         self.cmd_pub.publish(msg)
 
     def publish_status(self, active: bool):

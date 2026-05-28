@@ -9,7 +9,8 @@ Or pass the path as a command-line argument to override:
 """
 
 
-BAG_PATH = r"C:\Users\vegar\Documents\Isacsim\git\local\Master\Rosbag"
+#BAG_PATH = r"C:\Users\vegar\Documents\Isacsim\git\local\Master\Rosbag"
+BAG_PATH = r"C:\Users\vegar\Documents\Skole\Master\Code\Master\Rosbag"
 SAVE_PLOTS = True          # Set True to save PNGs automatically
 SHOW_PLOTS = True           # Set False to suppress plot windows
 OUTPUT_DIR = "rosbag_plots" # Folder for saved PNGs (relative or absolute)

@@ -14,7 +14,8 @@ PORT = 5555
 # ── Edit this ─────────────────────────────────────────────────────────────────
 # Set to a path.csv file to load a real path, or leave as "" to use the
 # hardcoded waypoints below.
-PATH_CSV = r"C:\Users\vegar\Documents\Isacsim\git\local\Master\Rosbag\path.csv"
+#PATH_CSV = r"C:\Users\vegar\Documents\Isacsim\git\local\Master\Rosbag\path.csv"
+PATH_CSV = r"c:\Users\vegar\Documents\Skole\Master\Code\Master\Rosbag\path.csv"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -32,9 +33,9 @@ theta_sw_max = math.degrees(delta_max * STEERING_RATIO)  # max steering-wheel an
 
 Qe       = 0.1 * 10    # cross-track error weight
 Qpsi     = 0.1*1     # heading error weight
-Rdelta   = 100 * 0.001       # Steering angle rate weight
+Rdelta   = 0.1 * 1       # Steering angle rate weight
 Rtorque  = 0.01    # torque magnitude weight
-Rdtorque = 0.1     # torque rate weight
+Rdtorque = 0.1*1000     # torque rate weight
 
 nx, nu = 3, 1      # states: [e, psi_err, theta_sw_deg],  input: torque [-1, 1]
 

@@ -10,7 +10,8 @@ import matplotlib.pyplot as plt
 # Point at the same path.csv used by the MPC server.
 # The simulator will start at the first waypoint, heading toward the second.
 # Set to "" to fall back to x=0, y=0, yaw=0.
-PATH_CSV = r"C:\Users\vegar\Documents\Isacsim\git\local\Master\Rosbag\path.csv"
+#PATH_CSV = r"C:\Users\vegar\Documents\Isacsim\git\local\Master\Rosbag\path.csv"
+PATH_CSV = r"c:\Users\vegar\Documents\Skole\Master\Code\Master\Rosbag\path.csv"
 # ─────────────────────────────────────────────────────────────────────────────
 
 

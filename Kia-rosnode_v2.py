@@ -22,6 +22,8 @@ import numpy as np
 import casadi as ca
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
+from velocity_profile import generate_velocity_profile
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, qos_profile_sensor_data
@@ -368,6 +370,11 @@ class MpcV4IpoptCarNode(Node):
         self.declare_parameter("delta_max_deg", 35.0)
         self.declare_parameter("kp_speed", 0.3)
 
+        # Velocity profile — when True the speed at each waypoint is computed
+        # from path curvature using velocity_profile.py instead of using a flat
+        # default_speed_mps for the whole path.
+        self.declare_parameter("use_velocity_profile", True)
+
         # The MPC now outputs normalized steering torque directly.
         self.declare_parameter("hold_last_on_solver_fail", True)
         self.declare_parameter("auto_enable", False)
@@ -460,11 +467,40 @@ class MpcV4IpoptCarNode(Node):
     def _load_path_from_file(self, path_csv: str):
         default_speed = float(self.get_parameter("default_speed_mps").value)
         ds = float(self.get_parameter("ds").value)
+        use_vel_profile = bool(self.get_parameter("use_velocity_profile").value)
+
         try:
             waypoints = load_waypoints_csv(path_csv, default_speed)
         except Exception as exc:
             self.get_logger().error(f"Failed to load path CSV '{path_csv}': {exc}")
             return
+
+        if use_vel_profile:
+            try:
+                from pathlib import Path as _Path
+                v_max_mps = float(self.get_parameter("desired_speed_mps").value)
+                _, _, _, _, v_smooth = generate_velocity_profile(
+                    path_csv=_Path(path_csv),
+                    v_max_kmh=v_max_mps * 3.6,
+                    output_csv=None,
+                    plot=False,
+                )
+                # Replace every waypoint's speed with the curvature-based profile.
+                # v_smooth is sampled at the raw CSV waypoints, same length as waypoints.
+                waypoints = [
+                    (wp[0], wp[1], float(v_smooth[i]))
+                    for i, wp in enumerate(waypoints)
+                ]
+                self.get_logger().info(
+                    f"Velocity profile applied: "
+                    f"min={min(w[2] for w in waypoints)*3.6:.1f} "
+                    f"max={max(w[2] for w in waypoints)*3.6:.1f} km/h"
+                )
+            except Exception as exc:
+                self.get_logger().warn(
+                    f"Velocity profile failed ({exc}), falling back to flat speed {default_speed*3.6:.1f} km/h"
+                )
+
         self.get_logger().info(f"Loaded path CSV '{path_csv}' with {len(waypoints)} waypoints")
         self.xref, self.yref, self.psiref, self.vref, self.kappa_path, self.s_ref = \
             compute_heading_and_curvature_from_spline(waypoints, ds, kind_xy="cubic", kind_v="pchip")

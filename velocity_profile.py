@@ -146,6 +146,13 @@ def smooth_backward(v, s, a_brake):
     return v
 
 
+def box_smooth(x, w=9):
+    """Box (moving-average) filter — same as the w=9 used in the MPC files."""
+    if w <= 1:
+        return x
+    return np.convolve(x, np.ones(w) / w, mode="same")
+
+
 def gaussian_smooth_arclength(values, s, sigma_m):
     """
     Gaussian smooth in arc-length space.
@@ -196,6 +203,7 @@ def generate_velocity_profile(
 
     # 2. Curvature — smooth first to remove point-to-point noise
     kappa_raw    = curvature(xs, ys)
+    kappa_w9     = box_smooth(kappa_raw, w=9)
     kappa        = gaussian_smooth_arclength(kappa_raw, s, smooth_sigma_m)
     kappa        = np.clip(kappa, 0.0, None)   # smoothing can create tiny negatives
     print(f"Curvature   max={kappa.max():.4f}  mean={kappa.mean():.4f}  "
@@ -253,8 +261,9 @@ def generate_velocity_profile(
 
         # — Curvature vs distance —
         ax = axes[1]
-        ax.plot(s, kappa_raw, color="tab:red",  linewidth=0.8, alpha=0.4, label="Raw")
-        ax.plot(s, kappa,     color="tab:red",  linewidth=1.6,             label=f"Smoothed ({smooth_sigma_m} m)")
+        ax.plot(s, kappa_raw, color="tab:red",    linewidth=0.8, alpha=0.3, label="Raw")
+        ax.plot(s, kappa_w9,  color="tab:orange", linewidth=1.2, alpha=0.8, label="w=9 box filter (MPC)")
+        ax.plot(s, kappa,     color="tab:red",    linewidth=1.6,             label=f"Gaussian ({smooth_sigma_m} m)")
         ax.set_ylabel("Curvature [1/m]")
         ax.set_xlabel("Distance along path [m]")
         ax.legend(); ax.grid(True)

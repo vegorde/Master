@@ -39,7 +39,6 @@ FLOAT64_TOPICS = [
 ]
 
 TWIST_TOPICS = [
-    "/cmd_vel",
     "/path_follower/cmd_vel",
 ]
 
@@ -92,6 +91,7 @@ def load_path_csv(bag_dir: Path):
     candidates = [
         bag_dir / "path.csv",
         bag_dir.parent / "path.csv",
+        bag_dir.parent / "Rosbag" / "path.csv",
     ]
     for p in candidates:
         if p.exists():
@@ -143,43 +143,47 @@ def read_rosbag(bag_path: Path):
                 print(f"  [skip] could not deserialize {topic}: {e}")
                 continue
 
-            if topic in FLOAT64_TOPICS:
-                f64[topic]["t"].append(t)
-                f64[topic]["y"].append(float(msg.data))
+            try:
+                if topic in FLOAT64_TOPICS:
+                    f64[topic]["t"].append(t)
+                    f64[topic]["y"].append(float(msg.data))
 
-            elif topic in TWIST_TOPICS:
-                d = twist[topic]
-                d["t"].append(t)
-                d["lx"].append(float(msg.linear.x))
-                d["ly"].append(float(msg.linear.y))
-                d["lz"].append(float(msg.linear.z))
-                d["ax"].append(float(msg.angular.x))
-                d["ay"].append(float(msg.angular.y))
-                d["az"].append(float(msg.angular.z))
+                elif topic in TWIST_TOPICS:
+                    d = twist[topic]
+                    d["t"].append(t)
+                    d["lx"].append(float(msg.linear.x))
+                    d["ly"].append(float(msg.linear.y))
+                    d["lz"].append(float(msg.linear.z))
+                    d["ax"].append(float(msg.angular.x))
+                    d["ay"].append(float(msg.angular.y))
+                    d["az"].append(float(msg.angular.z))
 
-            elif topic in TWIST_STAMPED_TOPICS:
-                d = twstp[topic]
-                d["t"].append(t)
-                d["lx"].append(float(msg.twist.linear.x))
-                d["ly"].append(float(msg.twist.linear.y))
-                d["lz"].append(float(msg.twist.linear.z))
-                d["ax"].append(float(msg.twist.angular.x))
-                d["ay"].append(float(msg.twist.angular.y))
-                d["az"].append(float(msg.twist.angular.z))
+                elif topic in TWIST_STAMPED_TOPICS:
+                    d = twstp[topic]
+                    d["t"].append(t)
+                    d["lx"].append(float(msg.twist.linear.x))
+                    d["ly"].append(float(msg.twist.linear.y))
+                    d["lz"].append(float(msg.twist.linear.z))
+                    d["ax"].append(float(msg.twist.angular.x))
+                    d["ay"].append(float(msg.twist.angular.y))
+                    d["az"].append(float(msg.twist.angular.z))
 
-            elif topic in VECTOR3_STAMPED_TOPICS:
-                d = vec3[topic]
-                d["t"].append(t)
-                d["x"].append(float(msg.vector.x))
-                d["y"].append(float(msg.vector.y))
-                d["z"].append(float(msg.vector.z))
+                elif topic in VECTOR3_STAMPED_TOPICS:
+                    d = vec3[topic]
+                    d["t"].append(t)
+                    d["x"].append(float(msg.vector.x))
+                    d["y"].append(float(msg.vector.y))
+                    d["z"].append(float(msg.vector.z))
 
-            elif topic in POSE_STAMPED_TOPICS:
-                d = pose[topic]
-                d["t"].append(t)
-                d["x"].append(float(msg.pose.position.x))
-                d["y"].append(float(msg.pose.position.y))
-                d["z"].append(float(msg.pose.position.z))
+                elif topic in POSE_STAMPED_TOPICS:
+                    d = pose[topic]
+                    d["t"].append(t)
+                    d["x"].append(float(msg.pose.position.x))
+                    d["y"].append(float(msg.pose.position.y))
+                    d["z"].append(float(msg.pose.position.z))
+
+            except AttributeError as e:
+                print(f"  [skip] unexpected message structure for {topic} ({conn.msgtype}): {e}")
 
     return f64, twist, twstp, vec3, pose
 
@@ -372,7 +376,10 @@ def main():
     bag_path   = Path(args.bag_path) if args.bag_path else Path(BAG_PATH)
     save       = args.save or SAVE_PLOTS
     show       = not args.no_show and SHOW_PLOTS
-    output_dir = Path(args.output_dir) if args.output_dir else Path(OUTPUT_DIR)
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = Path(OUTPUT_DIR) / bag_path.name
 
     if not bag_path.exists():
         raise FileNotFoundError(f"Bag path does not exist: {bag_path}")
